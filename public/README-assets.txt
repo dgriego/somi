@@ -1,1 +1,0 @@
-Somi photo assets are stored here.
