@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import "./globals.css";
+import "./site.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://somi-lyart.vercel.app"),
