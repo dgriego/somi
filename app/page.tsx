@@ -32,7 +32,6 @@ type MemoryRecord = {
   body: string;
   location?: string;
   mediaItems?: MemoryMedia[];
-  // Legacy fields from the first version. These are migrated when the item is next saved.
   media?: Blob;
   mediaKind?: MediaKind;
   mediaName?: string;
@@ -42,28 +41,45 @@ type MemoryRecord = {
 type MemoryMediaView = Omit<MemoryMedia, "blob"> & { url: string };
 type MemoryView = MemoryRecord & { mediaViews: MemoryMediaView[] };
 
+type SeedMemory = {
+  id: string;
+  date: string;
+  kicker: string;
+  title: string;
+  body: string;
+  icon: "heart" | "paw";
+  upcoming?: boolean;
+  rescueLink?: boolean;
+  media?: { src: string; alt: string }[];
+};
+
 const DB_NAME = "somi-journal";
 const STORE_NAME = "memories";
 
-const seedMemories = [
+const seedMemories: SeedMemory[] = [
   {
     id: "rescue",
     date: "Before September 2026",
-    kicker: "Korea",
-    title: "His story changed",
+    kicker: "South Korea",
+    title: "From Wrigley to Somi",
     body:
-      "Somi is a one-year-old golden retriever who was rescued in Korea. Before rescue, he was at risk of being sold into the dog meat trade. Golden Bond Retriever Rescue helped give him a different path forward.",
+      "In South Korea, Somi was first known as Wrigley. When his previous owners planned to sell him into the dog meat trade, Golden Bond Retriever Rescue stepped in and gave him the chance to begin again.",
     icon: "heart",
     rescueLink: true,
   },
   {
-    id: "first-things",
-    date: "September 8, 2026",
-    kicker: "What we know so far",
-    title: "Friendly, social, golden",
+    id: "first-photos",
+    date: "September 1, 2026",
+    kicker: "South Korea",
+    title: "The first photos of Somi",
     body:
-      "The first notes about Somi are simple and very promising: he is friendly with people, he likes other dogs, and he already looks like a professional heart-stealer.",
+      "These were the first photos we received of Somi. They gave us our first glimpse of his sweet face, golden coat, and warm, social personality before his journey home began.",
     icon: "paw",
+    media: [
+      { src: "/somi-first-1.webp", alt: "Somi standing on a wooden deck in South Korea" },
+      { src: "/somi-first-2.webp", alt: "Side view of Somi in South Korea" },
+      { src: "/somi-first-3.webp", alt: "Somi looking toward the camera in South Korea" },
+    ],
   },
   {
     id: "homecoming",
@@ -71,8 +87,8 @@ const seedMemories = [
     kicker: "Portland, Oregon",
     title: "Homecoming day",
     body:
-      "Pickup day. This is where the next part of Somi's story begins: new routines, new smells, new favorite places, and a lot of firsts worth remembering.",
-    icon: "home",
+      "Somi arrives home. A new name, new routines, new favorite places, and the beginning of all the small moments that will make this place his own.",
+    icon: "paw",
     upcoming: true,
   },
 ];
@@ -97,9 +113,7 @@ async function listMemories(): Promise<MemoryRecord[]> {
     const tx = db.transaction(STORE_NAME, "readonly");
     const request = tx.objectStore(STORE_NAME).getAll();
     request.onsuccess = () => {
-      const rows = (request.result as MemoryRecord[]).sort((a, b) =>
-        a.date.localeCompare(b.date),
-      );
+      const rows = (request.result as MemoryRecord[]).sort((a, b) => a.date.localeCompare(b.date));
       resolve(rows);
     };
     request.onerror = () => reject(request.error);
@@ -292,32 +306,39 @@ export default function Home() {
             <span>People-friendly</span>
             <span>Dog-friendly</span>
           </div>
-          <a className="primary-link" href="#timeline">Follow his story <ArrowRight weight="bold" /></a>
+          <a className="primary-link" href="#story">Read his story <ArrowRight weight="bold" /></a>
         </div>
 
-        <div className="hero-art" aria-label="Somi photo area">
+        <div className="hero-art" aria-label="Somi's first photo">
           <div className="photo-stack photo-stack-back" />
           <div className="photo-stack photo-stack-mid" />
-          <div className="hero-photo-placeholder">
-            <PawPrint weight="fill" />
-            <span>Somi's first photo</span>
-            <small>Ready for his real photo</small>
+          <div className="hero-photo-frame">
+            <img src="/somi-first-1.webp" alt="Somi in South Korea, one of the first photos we received" />
           </div>
           <div className="hero-sticker"><Heart weight="fill" /> rescued in Korea</div>
         </div>
       </section>
 
       <section className="intro" id="story">
-        <p className="section-label">THE BEGINNING</p>
+        <p className="section-label">HIS STORY</p>
         <div className="intro-grid">
-          <h2>A safe place for all the moments that come next.</h2>
           <div>
+            <p className="story-kicker">Wrigley <ArrowRight /> Somi</p>
+            <h2>From Wrigley to Somi</h2>
+          </div>
+          <div className="story-copy">
             <p>
-              Somi's life is changing fast. This site is a simple record of the first days, awkward moments, tiny wins, favorite things, and everything that starts to feel like home.
+              In South Korea, Somi was first known as Wrigley. When his previous owners planned to sell him into the dog meat trade, Golden Bond Retriever Rescue stepped in and gave him the chance to begin again.
             </p>
             <p>
-              The timeline can grow one memory at a time with photos, videos, or just a few words.
+              Through all the uncertainty, his warm nature kept shining through. He's friendly with dogs and people, a happy, social boy who seems ready to make a friend wherever he goes.
             </p>
+            <p>
+              Now he has a new name, Somi, and a home waiting for him. His journey from Korea leads to Sunday, September 13, when he'll finally arrive and the next part of his story can begin.
+            </p>
+            <a className="story-rescue-link" href="https://goldenbondrescue.org/" target="_blank" rel="noreferrer">
+              Golden Bond Retriever Rescue <ArrowRight weight="bold" />
+            </a>
           </div>
         </div>
       </section>
@@ -338,7 +359,16 @@ export default function Home() {
               <div className={`timeline-node ${memory.upcoming ? "timeline-node-upcoming" : ""}`}>
                 {memory.icon === "heart" ? <Heart weight="fill" /> : <PawPrint weight="fill" />}
               </div>
-              <div className={`memory-card ${memory.upcoming ? "memory-card-upcoming" : ""}`}>
+              <div className={`memory-card seed-memory-card ${memory.media?.length ? "has-media" : ""} ${memory.upcoming ? "memory-card-upcoming" : ""}`}>
+                {memory.media?.length ? (
+                  <div className="media-grid seed-media-grid">
+                    {memory.media.map((media) => (
+                      <div className="media-tile" key={media.src}>
+                        <img src={media.src} alt={media.alt} />
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="memory-card-meta">
                   <span>{memory.kicker}</span>
                   {memory.upcoming && <span className="upcoming-badge">coming up</span>}
