@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./enhancements.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://somi-lyart.vercel.app"),
@@ -8,13 +9,13 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Somi's Story",
     description: "From South Korea to Portland, one golden retriever's new beginning.",
-    images: ["/somi-first-1.webp"],
+    images: ["/api/somi-photo/1"],
   },
   twitter: {
     card: "summary_large_image",
     title: "Somi's Story",
     description: "From South Korea to Portland, one golden retriever's new beginning.",
-    images: ["/somi-first-1.webp"],
+    images: ["/api/somi-photo/1"],
   },
 };
 
