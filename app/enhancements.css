@@ -150,6 +150,116 @@
   height: 14px;
 }
 
+/* Somi's real first photos */
+.hero-photo-frame {
+  position: absolute;
+  width: min(390px, 78%);
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  border-radius: 28px;
+  background: #bcc9ae;
+  box-shadow: var(--shadow);
+  transform: rotate(1.5deg);
+}
+
+.hero-photo-frame img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  object-position: 50% 40%;
+}
+
+.story-kicker {
+  margin: 0 0 16px !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--gold-soft) !important;
+  font-size: 11px !important;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+}
+
+.story-kicker svg {
+  width: 14px;
+  height: 14px;
+}
+
+.story-copy p {
+  max-width: 580px;
+}
+
+.story-rescue-link {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--gold-soft);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  transition: color 160ms ease, transform 160ms ease;
+}
+
+.story-rescue-link:hover {
+  color: white;
+  transform: translateX(2px);
+}
+
+.story-rescue-link svg {
+  width: 14px;
+  height: 14px;
+}
+
+.seed-memory-card.has-media {
+  padding: 10px 10px 26px;
+  overflow: hidden;
+}
+
+.seed-memory-card.has-media .memory-card-meta,
+.seed-memory-card.has-media h3,
+.seed-memory-card.has-media > p,
+.seed-memory-card.has-media > .rescue-link {
+  margin-left: 19px;
+  margin-right: 19px;
+}
+
+.seed-memory-card.has-media .memory-card-meta {
+  margin-top: 16px;
+}
+
+.seed-media-grid {
+  grid-template-columns: 0.9fr 1.1fr;
+  grid-template-rows: 150px 150px;
+}
+
+.seed-media-grid .media-tile {
+  min-height: 0;
+}
+
+.seed-media-grid .media-tile:first-child {
+  grid-row: 1 / span 2;
+}
+
+.seed-media-grid .media-tile img {
+  min-height: 0;
+  max-height: none;
+  height: 100%;
+}
+
+.timeline-heading {
+  align-items: flex-end;
+}
+
+@media (max-width: 860px) {
+  .timeline-heading {
+    align-items: flex-start;
+  }
+}
+
 @media (max-width: 560px) {
   .media-grid {
     grid-template-columns: 1fr;
@@ -159,5 +269,22 @@
   .media-tile video {
     aspect-ratio: 4 / 3;
     max-height: 360px;
+  }
+
+  .hero-photo-frame {
+    width: 76%;
+  }
+
+  .seed-media-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
+
+  .seed-media-grid .media-tile:first-child {
+    grid-row: auto;
+  }
+
+  .seed-media-grid .media-tile:first-child img {
+    aspect-ratio: 4 / 5;
   }
 }
