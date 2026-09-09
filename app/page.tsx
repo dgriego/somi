@@ -18,28 +18,33 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type MediaKind = "image" | "video";
 
-type MemoryMedia = {
+type Attachment = {
   id: string;
   blob: Blob;
   kind: MediaKind;
   name: string;
+  mime?: string;
 };
 
-type MemoryRecord = {
+type StoredMemory = {
   id: string;
   date: string;
   title: string;
   body: string;
   location?: string;
-  mediaItems?: MemoryMedia[];
+  attachments?: Attachment[];
+  createdAt: number;
+  // Compatibility with memories saved by earlier versions.
+  mediaItems?: Attachment[];
   media?: Blob;
   mediaKind?: MediaKind;
   mediaName?: string;
-  createdAt: number;
 };
 
-type MemoryMediaView = Omit<MemoryMedia, "blob"> & { url: string };
-type MemoryView = MemoryRecord & { mediaViews: MemoryMediaView[] };
+type MemoryView = StoredMemory & {
+  attachments: Attachment[];
+  mediaViews: Array<Attachment & { url: string }>;
+};
 
 type SeedMemory = {
   id: string;
@@ -50,7 +55,7 @@ type SeedMemory = {
   icon: "heart" | "paw";
   upcoming?: boolean;
   rescueLink?: boolean;
-  media?: { src: string; alt: string }[];
+  media?: Array<{ src: string; alt: string }>;
 };
 
 const DB_NAME = "somi-journal";
@@ -107,13 +112,35 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-async function listMemories(): Promise<MemoryRecord[]> {
+function inferKind(blob: Blob, name = ""): MediaKind {
+  if (blob.type.startsWith("video/")) return "video";
+  if (blob.type.startsWith("image/")) return "image";
+  const extension = name.split(".").pop()?.toLowerCase();
+  return ["mp4", "mov", "m4v", "webm", "ogv"].includes(extension || "") ? "video" : "image";
+}
+
+function normalizeAttachments(memory: StoredMemory): Attachment[] {
+  if (memory.attachments?.length) return memory.attachments;
+  if (memory.mediaItems?.length) return memory.mediaItems;
+  if (!memory.media) return [];
+  return [
+    {
+      id: `${memory.id}-legacy-media`,
+      blob: memory.media,
+      kind: memory.mediaKind || inferKind(memory.media, memory.mediaName),
+      name: memory.mediaName || memory.title,
+      mime: memory.media.type,
+    },
+  ];
+}
+
+async function listMemories(): Promise<StoredMemory[]> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
     const request = tx.objectStore(STORE_NAME).getAll();
     request.onsuccess = () => {
-      const rows = (request.result as MemoryRecord[]).sort((a, b) => a.date.localeCompare(b.date));
+      const rows = (request.result as StoredMemory[]).sort((a, b) => a.date.localeCompare(b.date));
       resolve(rows);
     };
     request.onerror = () => reject(request.error);
@@ -121,7 +148,7 @@ async function listMemories(): Promise<MemoryRecord[]> {
   });
 }
 
-async function saveMemory(memory: MemoryRecord) {
+async function putMemory(memory: StoredMemory) {
   const db = await openDb();
   return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -130,11 +157,12 @@ async function saveMemory(memory: MemoryRecord) {
       db.close();
       resolve();
     };
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = () => reject(tx.error || new Error("Could not save memory"));
+    tx.onabort = () => reject(tx.error || new Error("Could not save memory"));
   });
 }
 
-async function removeMemory(id: string) {
+async function deleteMemory(id: string) {
   const db = await openDb();
   return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -147,19 +175,6 @@ async function removeMemory(id: string) {
   });
 }
 
-function normalizeMedia(memory: MemoryRecord): MemoryMedia[] {
-  if (memory.mediaItems?.length) return memory.mediaItems;
-  if (!memory.media) return [];
-  return [
-    {
-      id: `${memory.id}-legacy-media`,
-      blob: memory.media,
-      kind: memory.mediaKind || (memory.media.type.startsWith("video/") ? "video" : "image"),
-      name: memory.mediaName || memory.title,
-    },
-  ];
-}
-
 function prettyDate(value: string) {
   const parsed = new Date(`${value}T12:00:00`);
   if (Number.isNaN(parsed.getTime())) return value;
@@ -170,36 +185,65 @@ function prettyDate(value: string) {
   }).format(parsed);
 }
 
+function MediaTile({ media, title }: { media: Attachment & { url: string }; title: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div className="media-fallback">
+        {media.kind === "video" ? <FilmStrip /> : <Camera />}
+        <strong>{media.name || title}</strong>
+        <small>This file format cannot be previewed in this browser.</small>
+      </div>
+    );
+  }
+
+  if (media.kind === "video") {
+    return (
+      <video
+        src={media.url}
+        controls
+        playsInline
+        preload="metadata"
+        onError={() => setFailed(true)}
+        aria-label={media.name || title}
+      />
+    );
+  }
+
+  return <img src={media.url} alt={media.name || title} loading="lazy" onError={() => setFailed(true)} />;
+}
+
 export default function Home() {
   const [memories, setMemories] = useState<MemoryView[]>([]);
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [date, setDate] = useState("");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [location, setLocation] = useState("");
-  const [mediaDrafts, setMediaDrafts] = useState<MemoryMedia[]>([]);
+  const [drafts, setDrafts] = useState<Attachment[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   async function refreshMemories() {
     const rows = await listMemories();
+    const next = rows.map((item) => {
+      const attachments = normalizeAttachments(item);
+      return {
+        ...item,
+        attachments,
+        mediaViews: attachments.map((media) => ({ ...media, url: URL.createObjectURL(media.blob) })),
+      };
+    });
     setMemories((current) => {
       current.forEach((item) => item.mediaViews.forEach((media) => URL.revokeObjectURL(media.url)));
-      return rows.map((item) => ({
-        ...item,
-        mediaViews: normalizeMedia(item).map((media) => ({
-          id: media.id,
-          kind: media.kind,
-          name: media.name,
-          url: URL.createObjectURL(media.blob),
-        })),
-      }));
+      return next;
     });
   }
 
   useEffect(() => {
-    refreshMemories().catch(() => undefined);
+    refreshMemories().catch(() => setSaveError("Your saved memories could not be opened in this browser."));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -211,8 +255,9 @@ export default function Home() {
     setTitle("");
     setBody("");
     setLocation("");
-    setMediaDrafts([]);
+    setDrafts([]);
     setSaved(false);
+    setSaveError("");
   }
 
   function openNewMemory() {
@@ -226,8 +271,9 @@ export default function Home() {
     setTitle(memory.title);
     setBody(memory.body);
     setLocation(memory.location || "");
-    setMediaDrafts(normalizeMedia(memory));
+    setDrafts(memory.attachments);
     setSaved(false);
+    setSaveError("");
     setComposerOpen(true);
   }
 
@@ -236,36 +282,39 @@ export default function Home() {
     resetComposer();
   }
 
-  function addMedia(files: FileList | null) {
+  function addFiles(files: FileList | null) {
     if (!files?.length) return;
-    const additions = Array.from(files).map((file) => ({
+    const attachments = Array.from(files).map((file) => ({
       id: crypto.randomUUID(),
       blob: file,
-      kind: file.type.startsWith("video/") ? ("video" as const) : ("image" as const),
+      kind: inferKind(file, file.name),
       name: file.name,
+      mime: file.type,
     }));
-    setMediaDrafts((current) => [...current, ...additions]);
+    setDrafts((current) => [...current, ...attachments]);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!date || !title.trim() || !body.trim()) return;
-
     setSaving(true);
+    setSaveError("");
     try {
       const existing = editingId ? memories.find((memory) => memory.id === editingId) : undefined;
-      await saveMemory({
+      await putMemory({
         id: editingId || crypto.randomUUID(),
         date,
         title: title.trim(),
         body: body.trim(),
         location: location.trim() || undefined,
-        mediaItems: mediaDrafts,
+        attachments: drafts,
         createdAt: existing?.createdAt || Date.now(),
       });
       await refreshMemories();
       setSaved(true);
-      window.setTimeout(() => closeComposer(), 650);
+      window.setTimeout(closeComposer, 550);
+    } catch {
+      setSaveError("That memory could not be saved. Large videos can exceed the browser's local storage limit.");
     } finally {
       setSaving(false);
     }
@@ -273,7 +322,7 @@ export default function Home() {
 
   async function handleDelete(id: string) {
     if (!window.confirm("Delete this memory from Somi's timeline?")) return;
-    await removeMemory(id);
+    await deleteMemory(id);
     await refreshMemories();
   }
 
@@ -287,68 +336,47 @@ export default function Home() {
         <nav>
           <a href="#story">Story</a>
           <a href="#timeline">Timeline</a>
-          <button className="header-add" onClick={openNewMemory}>
-            <Plus weight="bold" /> Add a memory
-          </button>
+          <button className="header-add" onClick={openNewMemory}><Plus weight="bold" /> Add a memory</button>
         </nav>
       </header>
 
       <section className="hero" id="top">
         <div className="hero-copy">
-          <div className="eyebrow"><span className="eyebrow-dot" /> Korea <ArrowRight /> Portland</div>
-          <h1>Hi, I'm <span>Somi.</span></h1>
-          <p className="hero-lede">
-            One golden retriever, one very big change, and a growing collection of the little moments that make a life.
-          </p>
-          <div className="profile-pills" aria-label="Somi profile">
-            <span>1 year old</span>
-            <span>Golden retriever</span>
-            <span>People-friendly</span>
-            <span>Dog-friendly</span>
+          <div className="eyebrow"><span /> South Korea <ArrowRight /> Portland</div>
+          <h1>Hi, I'm <em>Somi.</em></h1>
+          <p className="hero-lede">One golden retriever, one very big change, and a growing collection of the little moments that make a life.</p>
+          <div className="profile-pills">
+            <span>1 year old</span><span>Golden retriever</span><span>People-friendly</span><span>Dog-friendly</span>
           </div>
           <a className="primary-link" href="#story">Read his story <ArrowRight weight="bold" /></a>
         </div>
-
-        <div className="hero-art" aria-label="Somi's first photo">
+        <div className="hero-art">
           <div className="photo-stack photo-stack-back" />
           <div className="photo-stack photo-stack-mid" />
-          <div className="hero-photo-frame">
-            <img src="/somi-first-1.webp" alt="Somi in South Korea, one of the first photos we received" />
-          </div>
+          <div className="hero-photo-frame"><img src="/somi-first-1.webp" alt="Somi in South Korea, one of the first photos we received" /></div>
           <div className="hero-sticker"><Heart weight="fill" /> rescued in Korea</div>
         </div>
       </section>
 
-      <section className="intro" id="story">
+      <section className="story-section" id="story">
         <p className="section-label">HIS STORY</p>
-        <div className="intro-grid">
+        <div className="story-grid">
           <div>
             <p className="story-kicker">Wrigley <ArrowRight /> Somi</p>
             <h2>From Wrigley to Somi</h2>
           </div>
           <div className="story-copy">
-            <p>
-              In South Korea, Somi was first known as Wrigley. When his previous owners planned to sell him into the dog meat trade, Golden Bond Retriever Rescue stepped in and gave him the chance to begin again.
-            </p>
-            <p>
-              Through all the uncertainty, his warm nature kept shining through. He's friendly with dogs and people, a happy, social boy who seems ready to make a friend wherever he goes.
-            </p>
-            <p>
-              Now he has a new name, Somi, and a home waiting for him. His journey from Korea leads to Sunday, September 13, when he'll finally arrive and the next part of his story can begin.
-            </p>
-            <a className="story-rescue-link" href="https://goldenbondrescue.org/" target="_blank" rel="noreferrer">
-              Golden Bond Retriever Rescue <ArrowRight weight="bold" />
-            </a>
+            <p>In South Korea, Somi was first known as Wrigley. When his previous owners planned to sell him into the dog meat trade, Golden Bond Retriever Rescue stepped in and gave him the chance to begin again.</p>
+            <p>Through all the uncertainty, his warm nature kept shining through. He's friendly with dogs and people, a happy, social boy who seems ready to make a friend wherever he goes.</p>
+            <p>Now he has a new name, Somi, and a home waiting for him. His journey from Korea leads to Sunday, September 13, when he'll finally arrive and the next part of his story can begin.</p>
+            <a className="rescue-link story-rescue-link" href="https://goldenbondrescue.org/" target="_blank" rel="noreferrer">Golden Bond Retriever Rescue <ArrowRight weight="bold" /></a>
           </div>
         </div>
       </section>
 
       <section className="timeline-section" id="timeline">
         <div className="timeline-heading">
-          <div>
-            <p className="section-label">LIFE, IN ORDER</p>
-            <h2>Somi's timeline</h2>
-          </div>
+          <div><p className="section-label">LIFE, IN ORDER</p><h2>Somi's timeline</h2></div>
           <div className="memory-total"><span>{memoryCount}</span> moments so far</div>
         </div>
 
@@ -361,25 +389,16 @@ export default function Home() {
               </div>
               <div className={`memory-card seed-memory-card ${memory.media?.length ? "has-media" : ""} ${memory.upcoming ? "memory-card-upcoming" : ""}`}>
                 {memory.media?.length ? (
-                  <div className="media-grid seed-media-grid">
-                    {memory.media.map((media) => (
-                      <div className="media-tile" key={media.src}>
-                        <img src={media.src} alt={media.alt} />
-                      </div>
-                    ))}
+                  <div className="seed-gallery">
+                    {memory.media.map((media) => <img key={media.src} src={media.src} alt={media.alt} loading="lazy" />)}
                   </div>
                 ) : null}
-                <div className="memory-card-meta">
-                  <span>{memory.kicker}</span>
-                  {memory.upcoming && <span className="upcoming-badge">coming up</span>}
+                <div className="memory-card-inner">
+                  <div className="memory-card-meta"><span>{memory.kicker}</span>{memory.upcoming && <span className="upcoming-badge">coming up</span>}</div>
+                  <h3>{memory.title}</h3>
+                  <p>{memory.body}</p>
+                  {memory.rescueLink && <a className="rescue-link" href="https://goldenbondrescue.org/" target="_blank" rel="noreferrer">Golden Bond Retriever Rescue <ArrowRight weight="bold" /></a>}
                 </div>
-                <h3>{memory.title}</h3>
-                <p>{memory.body}</p>
-                {memory.rescueLink && (
-                  <a className="rescue-link" href="https://goldenbondrescue.org/" target="_blank" rel="noreferrer">
-                    Golden Bond Retriever Rescue <ArrowRight weight="bold" />
-                  </a>
-                )}
               </div>
             </article>
           ))}
@@ -391,30 +410,19 @@ export default function Home() {
               <div className="memory-card user-memory-card">
                 {memory.mediaViews.length > 0 && (
                   <div className={`media-grid ${memory.mediaViews.length === 1 ? "media-grid-single" : ""}`}>
-                    {memory.mediaViews.map((media) => (
-                      <div className="media-tile" key={media.id}>
-                        {media.kind === "image" ? (
-                          <img src={media.url} alt={media.name || memory.title} />
-                        ) : (
-                          <video src={media.url} controls preload="metadata" />
-                        )}
-                      </div>
-                    ))}
+                    {memory.mediaViews.map((media) => <div className="media-tile" key={media.id}><MediaTile media={media} title={memory.title} /></div>)}
                   </div>
                 )}
-                <div className="memory-card-meta">
-                  <span>{memory.location || "Somi's journal"}</span>
-                  <span className="memory-actions">
-                    <button className="edit-memory" onClick={() => openEditMemory(memory)} aria-label={`Edit ${memory.title}`}>
-                      <PencilSimple />
-                    </button>
-                    <button className="delete-memory" onClick={() => handleDelete(memory.id)} aria-label={`Delete ${memory.title}`}>
-                      <Trash />
-                    </button>
-                  </span>
+                <div className="memory-card-inner">
+                  <div className="memory-card-meta">
+                    <span>{memory.location || "Somi's journal"}</span>
+                    <span className="memory-actions">
+                      <button className="icon-button" onClick={() => openEditMemory(memory)} aria-label={`Edit ${memory.title}`}><PencilSimple /></button>
+                      <button className="icon-button delete-button" onClick={() => handleDelete(memory.id)} aria-label={`Delete ${memory.title}`}><Trash /></button>
+                    </span>
+                  </div>
+                  <h3>{memory.title}</h3><p>{memory.body}</p>
                 </div>
-                <h3>{memory.title}</h3>
-                <p>{memory.body}</p>
               </div>
             </article>
           ))}
@@ -423,10 +431,7 @@ export default function Home() {
             <div className="timeline-node timeline-node-add"><Plus weight="bold" /></div>
             <button className="add-memory-card" onClick={openNewMemory}>
               <span className="add-memory-icon"><Camera /></span>
-              <span>
-                <strong>Add the next memory</strong>
-                <small>Photos, videos, or a quick note</small>
-              </span>
+              <span><strong>Add the next memory</strong><small>Photos, videos, or a quick note</small></span>
               <ArrowRight weight="bold" />
             </button>
           </div>
@@ -445,69 +450,41 @@ export default function Home() {
       </footer>
 
       {composerOpen && (
-        <div className="composer-backdrop" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) closeComposer();
-        }}>
+        <div className="composer-backdrop" onMouseDown={(event) => event.target === event.currentTarget && closeComposer()}>
           <section className="composer" role="dialog" aria-modal="true" aria-labelledby="composer-title">
-            <button className="composer-close" onClick={closeComposer} aria-label="Close memory form"><X /></button>
+            <button className="composer-close" onClick={closeComposer} aria-label="Close"><X /></button>
             <div className="composer-heading">
               <span>{editingId ? <PencilSimple /> : <PawPrint weight="fill" />}</span>
-              <div>
-                <p className="section-label">SOMI'S JOURNAL</p>
-                <h2 id="composer-title">{editingId ? "Edit memory" : "Add a memory"}</h2>
-              </div>
+              <div><p className="section-label">SOMI'S JOURNAL</p><h2 id="composer-title">{editingId ? "Edit memory" : "Add a memory"}</h2></div>
             </div>
             <p className="composer-note">Saved privately in this browser for now. Photos and videos stay on this device.</p>
             <form onSubmit={handleSubmit}>
               <div className="form-row">
-                <label>
-                  <span><CalendarBlank /> Date</span>
-                  <input type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
-                </label>
-                <label>
-                  <span><MapPin /> Place <em>optional</em></span>
-                  <input type="text" value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Home, the park, the car..." />
-                </label>
+                <label><span><CalendarBlank /> Date</span><input type="date" value={date} onChange={(e) => setDate(e.target.value)} required /></label>
+                <label><span><MapPin /> Place <em>optional</em></span><input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Home, the park, the car..." /></label>
               </div>
-              <label>
-                <span>Title</span>
-                <input type="text" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="First walk around the block" required maxLength={80} />
-              </label>
-              <label>
-                <span>What happened?</span>
-                <textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="A few words about the moment..." required rows={5} maxLength={600} />
-              </label>
+              <label><span>Title</span><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="First walk around the block" maxLength={80} required /></label>
+              <label><span>What happened?</span><textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="A few words about the moment..." rows={5} maxLength={600} required /></label>
 
-              {mediaDrafts.length > 0 && (
+              {drafts.length > 0 && (
                 <div className="media-drafts">
-                  {mediaDrafts.map((media) => (
+                  {drafts.map((media) => (
                     <div className="media-draft-item" key={media.id}>
                       <span className="media-draft-icon">{media.kind === "video" ? <FilmStrip /> : <Camera />}</span>
-                      <span className="media-draft-name">{media.name}</span>
-                      <button type="button" className="remove-media" onClick={() => setMediaDrafts((current) => current.filter((item) => item.id !== media.id))} aria-label={`Remove ${media.name}`}>
-                        <X />
-                      </button>
+                      <span className="media-draft-name"><strong>{media.name}</strong><small>{media.mime || media.kind}</small></span>
+                      <button type="button" className="remove-media" onClick={() => setDrafts((current) => current.filter((item) => item.id !== media.id))} aria-label={`Remove ${media.name}`}><X /></button>
                     </div>
                   ))}
                 </div>
               )}
 
               <label className="media-picker">
-                <input
-                  type="file"
-                  accept="image/*,video/*"
-                  multiple
-                  onChange={(event) => {
-                    addMedia(event.target.files);
-                    event.target.value = "";
-                  }}
-                />
+                <input type="file" accept="image/*,video/*" multiple onChange={(event) => { addFiles(event.target.files); event.target.value = ""; }} />
                 <span className="media-picker-icon"><Camera /></span>
-                <span>
-                  <strong>{mediaDrafts.length ? "Add more photos or videos" : "Add photos or videos"}</strong>
-                  <small>Select several at once. You can mix photos and videos.</small>
-                </span>
+                <span><strong>{drafts.length ? "Add more photos or videos" : "Add photos or videos"}</strong><small>Select several at once. JPEG, PNG, WebP, MP4, and WebM are the most reliable formats.</small></span>
               </label>
+
+              {saveError && <p className="save-error">{saveError}</p>}
               <button className={`save-memory ${saved ? "save-memory-saved" : ""}`} type="submit" disabled={saving}>
                 {saved ? <><Check weight="bold" /> Saved</> : saving ? "Saving..." : editingId ? <><Check weight="bold" /> Save changes</> : <><Plus weight="bold" /> Add to Somi's timeline</>}
               </button>
